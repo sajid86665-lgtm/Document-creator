@@ -1,21 +1,426 @@
 require "import"
+import "com.androlua.Http"
+import "cjson"
+import "com.androlua.LuaDialog"
 import "android.widget.*"
 import "android.view.*"
-import "android.view.ViewGroup$LayoutParams"
-import "android.graphics.Typeface"
-import "android.text.method.ScrollingMovementMethod"
+import "android.graphics.Color"
 import "android.content.Context"
-import "android.speech.tts.TextToSpeech"
-import "java.io.File"
-import "com.androlua.LuaDialog"
+import "android.content.DialogInterface"
 import "android.content.Intent"
 import "android.net.Uri"
-import "android.os.Environment"
-import "android.media.MediaScannerConnection"
-import "android.widget.Toast"
 import "android.os.*"
+import "android.graphics.Typeface"
+import "java.io.*"
+import "android.text.method.ScrollingMovementMethod"
+import "android.speech.tts.TextToSpeech"
+import "android.media.MediaScannerConnection"
 
--- ====== TTS ======
+-- ====== UPDATE SYSTEM ======
+local PLUGIN_NAME = "Document Creator"
+local PLUGIN_AUTHOR = "sajid86665"
+local PLUGIN_DESC = "Create and manage TXT documents with ease."
+
+-- Update URLs (your GitHub links)
+local VERSION_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Virgin.Txt"
+local UPDATE_CODE_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Main.lua"
+local WHATS_NEW_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/What%27s%20new"
+
+-- Plugin storage (version file and main.lua saved here)
+local PLUGIN_DIR = "/storage/emulated/0/解说/Plugins/Document creator/"
+local PLUGIN_PATH = PLUGIN_DIR .. "main.lua"
+local VERSION_FILE = PLUGIN_DIR .. "version.txt"
+
+local updateInProgress = false
+local updateDialogShowing = false
+local updateDlg = nil
+local mainHandler = Handler(Looper.getMainLooper())
+local loadingDialog = nil
+
+pcall(function()
+    Http.setConnTimeout(60000)
+    Http.setReadTimeout(60000)
+end)
+
+function trim(s)
+    if s == nil then return "" end
+    return tostring(s):gsub("^%s*(.-)%s*$", "%1")
+end
+
+function getCurrentVersion()
+    local version = "1.0"
+    local f = io.open(VERSION_FILE, "r")
+    if f then
+        local content = f:read("*a")
+        f:close()
+        local trimmed = trim(content)
+        if trimmed ~= "" then version = trimmed end
+    else
+        local dir = File(PLUGIN_DIR)
+        if not dir.exists() then dir.mkdirs() end
+        local wf = io.open(VERSION_FILE, "w")
+        if wf then
+            wf:write(version)
+            wf:close()
+        end
+    end
+    return version
+end
+
+function showLoading(message)
+    mainHandler.post(Runnable({
+        run = function()
+            if loadingDialog then
+                pcall(function() loadingDialog.dismiss() end)
+            end
+            loadingDialog = LuaDialog(service)
+            loadingDialog.setTitle("Please Wait")
+            loadingDialog.setMessage(message or "Loading...")
+            loadingDialog.setCancelable(false)
+            loadingDialog.show()
+        end
+    }))
+end
+
+function hideLoading()
+    mainHandler.post(Runnable({
+        run = function()
+            if loadingDialog then
+                pcall(function() loadingDialog.dismiss() end)
+                loadingDialog = nil
+            end
+        end
+    }))
+end
+
+function showUpdateErrorDialog(title, message)
+    mainHandler.post(Runnable({
+        run = function()
+            hideLoading()
+            local errorDialog = LuaDialog(service)
+            errorDialog.setTitle(title)
+            errorDialog.setMessage(message)
+            errorDialog.setButton("OK", function()
+                errorDialog.dismiss()
+            end)
+            errorDialog.show()
+        end
+    }))
+end
+
+function dismissCurrentUpdateDialog()
+    if updateDlg then
+        pcall(function() updateDlg.dismiss() end)
+        updateDlg = nil
+    end
+end
+
+function checkUpdate(showToastIfNoUpdate)
+    if updateInProgress then 
+        if showToastIfNoUpdate then
+            Toast.makeText(service, "Update check already in progress", Toast.LENGTH_SHORT).show()
+        end
+        return 
+    end
+    
+    if updateDialogShowing then
+        if showToastIfNoUpdate then
+            Toast.makeText(service, "Update dialog already showing", Toast.LENGTH_SHORT).show()
+        end
+        return
+    end
+    
+    local currentVer = getCurrentVersion()
+    local timestamp = tostring(os.time())
+    Http.get(VERSION_URL .. "?t=" .. timestamp, function(code, response)
+        if code == 200 and response then
+            local onlineVersion = trim(response):match("([%d%.]+)") or trim(response)
+            if onlineVersion ~= "" and onlineVersion ~= currentVer then
+                dismissCurrentUpdateDialog()
+                
+                Http.get(UPDATE_CODE_URL .. "?t=" .. timestamp, function(code2, mainCode)
+                    if code2 == 200 and mainCode and trim(mainCode) ~= "" then
+                        Http.get(WHATS_NEW_URL .. "?t=" .. timestamp, function(code3, whatsNewContent)
+                            local changeLogText = (code3 == 200 and whatsNewContent and trim(whatsNewContent) ~= "") and trim(whatsNewContent) or "No changelog available."
+                            
+                            mainHandler.post(Runnable({
+                                run = function()
+                                    hideLoading()
+                                    
+                                    local changelogLines = {}
+                                    for line in string.gmatch(changeLogText, "([^\n]*)\n?") do
+                                        local trimmed = trim(line)
+                                        if trimmed ~= "" then
+                                            table.insert(changelogLines, trimmed)
+                                        end
+                                    end
+                                    if #changelogLines == 0 then
+                                        table.insert(changelogLines, "No changelog available.")
+                                    end
+                                    
+                                    local updateViews = {}
+                                    local updateLayout = {
+                                        ScrollView,
+                                        layout_width = "fill",
+                                        layout_height = "wrap_content",
+                                        {
+                                            LinearLayout,
+                                            orientation = "vertical",
+                                            padding = "20dp",
+                                            layout_width = "fill",
+                                            layout_height = "wrap",
+                                            {
+                                                Button,
+                                                id = "dismissBtn",
+                                                text = "Dismiss update dialog",
+                                                layout_width = "fill",
+                                                layout_height = "wrap",
+                                                layout_marginBottom = "15dp"
+                                            },
+                                            {
+                                                TextView,
+                                                text = "A new version of the extension is available!",
+                                                textSize = 15,
+                                                textColor = "#333333",
+                                                paddingBottom = "15dp"
+                                            },
+                                            {
+                                                LinearLayout,
+                                                orientation = "horizontal",
+                                                layout_width = "fill",
+                                                layout_height = "wrap",
+                                                paddingBottom = "10dp",
+                                                {
+                                                    TextView,
+                                                    text = "Current Version: ",
+                                                    textSize = 14,
+                                                    textColor = "#666666",
+                                                    typeface = Typeface.DEFAULT_BOLD
+                                                },
+                                                {
+                                                    TextView,
+                                                    text = currentVer,
+                                                    textSize = 14,
+                                                    textColor = "#D32F2F",
+                                                    typeface = Typeface.DEFAULT_BOLD
+                                                }
+                                            },
+                                            {
+                                                LinearLayout,
+                                                orientation = "horizontal",
+                                                layout_width = "fill",
+                                                layout_height = "wrap",
+                                                paddingBottom = "15dp",
+                                                {
+                                                    TextView,
+                                                    text = "Server Version: ",
+                                                    textSize = 14,
+                                                    textColor = "#666666",
+                                                    typeface = Typeface.DEFAULT_BOLD
+                                                },
+                                                {
+                                                    TextView,
+                                                    text = onlineVersion,
+                                                    textSize = 14,
+                                                    textColor = "#2E7D32",
+                                                    typeface = Typeface.DEFAULT_BOLD
+                                                }
+                                            },
+                                            {
+                                                TextView,
+                                                text = "What's New:",
+                                                textSize = 14,
+                                                textColor = "#1976D2",
+                                                typeface = Typeface.DEFAULT_BOLD,
+                                                paddingBottom = "5dp"
+                                            },
+                                            {
+                                                LinearLayout,
+                                                id = "changelogContainer",
+                                                orientation = "vertical",
+                                                layout_width = "fill",
+                                                layout_height = "wrap",
+                                                paddingBottom = "20dp"
+                                            },
+                                            {
+                                                Button,
+                                                id = "updateBtn",
+                                                text = "Update",
+                                                layout_width = "fill",
+                                                layout_height = "wrap",
+                                                layout_marginTop = "10dp"
+                                            }
+                                        }
+                                    }
+                                    
+                                    local updateAlertDlg = LuaDialog(service)
+                                    updateAlertDlg.setTitle("Update Available!")
+                                    updateAlertDlg.setView(loadlayout(updateLayout, updateViews))
+                                    
+                                    local container = updateViews.changelogContainer
+                                    if container then
+                                        for _, line in ipairs(changelogLines) do
+                                            local tv = TextView(service)
+                                            tv.setText(line)
+                                            tv.setTextSize(13)
+                                            tv.setTextColor(Color.parseColor("#444444"))
+                                            tv.setPadding(0, 4, 0, 4)
+                                            container.addView(tv)
+                                        end
+                                    end
+                                    
+                                    updateViews.updateBtn.setOnClickListener(function()
+                                        updateAlertDlg.dismiss()
+                                        updateDialogShowing = false
+                                        performUpdate(mainCode, onlineVersion)
+                                    end)
+                                    
+                                    updateViews.dismissBtn.setOnClickListener(function()
+                                        updateAlertDlg.dismiss()
+                                        updateDialogShowing = false
+                                    end)
+                                    
+                                    updateAlertDlg.setOnDismissListener(DialogInterface.OnDismissListener{
+                                        onDismiss = function(dialog)
+                                            updateDialogShowing = false
+                                        end
+                                    })
+                                    
+                                    updateDialogShowing = true
+                                    updateDlg = updateAlertDlg
+                                    updateAlertDlg.show()
+                                end
+                            }))
+                        end)
+                    else
+                        mainHandler.post(Runnable({
+                            run = function()
+                                hideLoading()
+                                if showToastIfNoUpdate then
+                                    Toast.makeText(service, "Failed to fetch update code", Toast.LENGTH_SHORT).show()
+                                end
+                            end
+                        }))
+                    end
+                end)
+            else
+                mainHandler.post(Runnable({
+                    run = function()
+                        hideLoading()
+                        if showToastIfNoUpdate then
+                            Toast.makeText(service, "No update available. You are on latest version (" .. currentVer .. ")", Toast.LENGTH_LONG).show()
+                        end
+                    end
+                }))
+            end
+        else
+            mainHandler.post(Runnable({
+                run = function()
+                    hideLoading()
+                    if showToastIfNoUpdate then
+                        Toast.makeText(service, "Failed to check update. Check internet.", Toast.LENGTH_SHORT).show()
+                    end
+                end
+            }))
+        end
+    end)
+end
+
+function performUpdate(mainCode, onlineVersion)
+    if not mainCode or trim(mainCode) == "" then
+        showUpdateErrorDialog("Update Failed", "Main extension code is empty.")
+        return
+    end
+    
+    updateInProgress = true
+    showLoading("Updating extension to v" .. onlineVersion .. "...")
+    
+    local function updateProcess()
+        local success = false
+        pcall(function()
+            local dir = File(PLUGIN_DIR)
+            if not dir.exists() then dir.mkdirs() end
+        end)
+        
+        local f = io.open(PLUGIN_PATH, "w")
+        if f then
+            f:write(mainCode)
+            f:close()
+            success = true
+        else
+            local tempPath = PLUGIN_PATH .. ".temp_update"
+            local tf = io.open(tempPath, "w")
+            if tf then
+                tf:write(mainCode)
+                tf:close()
+                pcall(function() os.remove(PLUGIN_PATH) end)
+                local renameOk = pcall(function() os.rename(tempPath, PLUGIN_PATH) end)
+                if renameOk then
+                    success = true
+                else
+                    pcall(function() os.remove(tempPath) end)
+                end
+            end
+        end
+        
+        if success then
+            local vf = io.open(VERSION_FILE, "w")
+            if vf then
+                vf:write(onlineVersion)
+                vf:close()
+            else
+                success = false
+            end
+        end
+        
+        if success then
+            updateInProgress = false
+            mainHandler.post(Runnable({
+                run = function()
+                    hideLoading()
+                    local successDialog = LuaDialog(service)
+                    successDialog.setTitle("Update Successful")
+                    successDialog.setMessage("Extension successfully updated to version " .. onlineVersion .. ".\n\nClick OK to restart.")
+                    successDialog.setButton("OK", function()
+                        pcall(function() successDialog.dismiss() end)
+                        pcall(function() 
+                            if updateDlg then 
+                                updateDlg.dismiss() 
+                                updateDlg = nil
+                            end 
+                        end)
+                        updateDialogShowing = false
+                        
+                        mainHandler.postDelayed(Runnable({
+                            run = function()
+                                local pluginFile = io.open(PLUGIN_PATH, "r")
+                                if pluginFile then
+                                    pluginFile:close()
+                                    local func, err = loadfile(PLUGIN_PATH)
+                                    if func then
+                                        pcall(func)
+                                    else
+                                        Toast.makeText(service, "Error reloading: " .. tostring(err), Toast.LENGTH_SHORT).show()
+                                    end
+                                end
+                            end
+                        }), 500)
+                    end)
+                    successDialog.show()
+                end
+            }))
+        else
+            updateInProgress = false
+            showUpdateErrorDialog("Update Failed", "Could not write files. Please check storage permission or path.")
+        end
+    end
+    
+    Thread(luajava.bindClass("java.lang.Runnable"){
+        run = updateProcess
+    }).start()
+end
+
+-- ====== ORIGINAL DOCUMENT CREATOR (with minor tweaks) ======
 local tts = TextToSpeech(service, function(status)
   if status ~= TextToSpeech.SUCCESS then tts = nil end
 end)
@@ -25,12 +430,10 @@ local function falar(txt)
   end
 end
 
--- ====== PASTA DE DOCUMENTOS ======
 local dir = "/storage/emulated/0/blind Tech hub/document creator/"
 local f = File(dir)
 if not f.exists() then f.mkdirs() end
 
--- ====== STRINGS (only English) ======
 local strings = {
   app_title          = "Document Creator",
   talk_dev           = "Talk to the developer",
@@ -70,13 +473,13 @@ local strings = {
   detail_path        = "Path",
   document_label     = "Document: ",
   no_docs            = "No documents found",
+  check_updates      = "Check for Updates",   -- new string
 }
 
 local function T(k)
   return strings[k] or k
 end
 
--- ====== COMMUNITY LINKS ======
 local community_links = {
   {title = "Telegram Discussion Group", url = "https://t.me/blindtechhubp2s"},
   {title = "Blind Tech Hub", url = "https://t.me/blindtechhubq7c"},
@@ -91,8 +494,6 @@ local community_links = {
 }
 
 local handler = Handler(Looper.getMainLooper())
-
--- ====== DIÁLOGOS ATIVOS ======
 local dlg, dlgOpcoes, dlgEditar, dlgEditarConteudo
 
 local function fecharTodos()
@@ -101,7 +502,6 @@ local function fecharTodos()
   end
 end
 
--- ====== LISTAR DOCUMENTOS ======
 local function listarDocumentos()
   local arquivos = {}
   local d = File(dir)
@@ -119,14 +519,12 @@ local function listarDocumentos()
   return arquivos
 end
 
--- ====== VALIDAÇÃO DO NOME ======
 local function nomeValido(n)
   if not n or n:gsub("%s", "") == "" then return false end
   if n:find('[\\/:*?"<>|]') then return false end
   return true
 end
 
--- ====== COMPARTILHAR ======
 local function compartilhar(nome)
   local arquivo = File(dir .. nome)
   if not arquivo.exists() then
@@ -153,7 +551,6 @@ local function compartilhar(nome)
   )
 end
 
--- ====== DETALHES ======
 local function mostrarDetalhes(nome, onBack)
   fecharTodos()
   local arquivo = File(dir .. nome)
@@ -187,7 +584,6 @@ local function mostrarDetalhes(nome, onBack)
   dlg.show()
 end
 
--- ====== EDITAR NOME ======
 local function editarNome(nome, onBack)
   fecharTodos()
   local ids_en = {}
@@ -231,7 +627,6 @@ local function editarNome(nome, onBack)
   dlgEditar.show()
 end
 
--- ====== EDITAR CONTEÚDO ======
 local function editarConteudo(nome, onBack)
   fecharTodos()
   local txt = ""
@@ -277,58 +672,7 @@ local function editarConteudo(nome, onBack)
   dlgEditarConteudo.show()
 end
 
--- declaração antecipada
-local criarVisualizador
-local criarListaDocumentos
-local criarInterfacePrincipal
-
--- ====== MENU OPÇÕES DO DOCUMENTO ======
-local function mostrarMenuOpcoes(nome)
-  fecharTodos()
-  local ids_op = {}
-  dlgOpcoes = LuaDialog(service)
-  dlgOpcoes.setView(loadlayout({
-    LinearLayout, orientation="vertical", padding="14dp",
-    background="#000000", layout_width="fill", layout_height="wrap_content",
-    {TextView, text=T("document_label")..nome, textSize="14sp",
-      textColor="#FFCC00", gravity="center", paddingBottom="8dp"},
-    {Button, id="btnVerDet",    text=T("details"),      layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
-    {Button, id="btnEditNome",  text=T("edit_name"),    layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
-    {Button, id="btnEditCont",  text=T("edit_content"), layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
-    {Button, id="btnShare",     text=T("share"),        layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
-    {Button, id="btnDelete",    text=T("delete"),       layout_width="fill", background="#880000", textColor="#FFFFFF"},
-    {Button, id="btnCloseOpts", text=T("close_options"),layout_width="fill", background="#333333", textColor="#FFFFFF"},
-  }, ids_op))
-  dlgOpcoes.setCancelable(false)
-
-  ids_op.btnVerDet.onClick = function()
-    mostrarDetalhes(nome, function() criarVisualizador(nome) end)
-  end
-  ids_op.btnEditNome.onClick = function()
-    editarNome(nome, function() criarListaDocumentos() end)
-  end
-  ids_op.btnEditCont.onClick = function()
-    editarConteudo(nome, function() criarListaDocumentos() end)
-  end
-  ids_op.btnShare.onClick = function()
-    compartilhar(nome)
-  end
-  ids_op.btnDelete.onClick = function()
-    File(dir .. nome).delete()
-    Toast.makeText(service, T("deleted"), 1).show()
-    falar(T("deleted"))
-    dlgOpcoes.dismiss()
-    criarListaDocumentos()
-  end
-  ids_op.btnCloseOpts.onClick = function()
-    dlgOpcoes.dismiss()
-    criarVisualizador(nome)
-  end
-  dlgOpcoes.show()
-end
-
--- ====== VISUALIZADOR ======
-criarVisualizador = function(nome)
+local function criarVisualizador(nome)
   fecharTodos()
   local txt = ""
   local arq = io.open(dir .. nome)
@@ -355,6 +699,49 @@ criarVisualizador = function(nome)
   dlg.setCancelable(false)
 
   ids_vis.btnOpcoes.onClick = function()
+    local function mostrarMenuOpcoes(nome)
+      fecharTodos()
+      local ids_op = {}
+      dlgOpcoes = LuaDialog(service)
+      dlgOpcoes.setView(loadlayout({
+        LinearLayout, orientation="vertical", padding="14dp",
+        background="#000000", layout_width="fill", layout_height="wrap_content",
+        {TextView, text=T("document_label")..nome, textSize="14sp",
+          textColor="#FFCC00", gravity="center", paddingBottom="8dp"},
+        {Button, id="btnVerDet",    text=T("details"),      layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
+        {Button, id="btnEditNome",  text=T("edit_name"),    layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
+        {Button, id="btnEditCont",  text=T("edit_content"), layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
+        {Button, id="btnShare",     text=T("share"),        layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
+        {Button, id="btnDelete",    text=T("delete"),       layout_width="fill", background="#880000", textColor="#FFFFFF"},
+        {Button, id="btnCloseOpts", text=T("close_options"),layout_width="fill", background="#333333", textColor="#FFFFFF"},
+      }, ids_op))
+      dlgOpcoes.setCancelable(false)
+
+      ids_op.btnVerDet.onClick = function()
+        mostrarDetalhes(nome, function() criarVisualizador(nome) end)
+      end
+      ids_op.btnEditNome.onClick = function()
+        editarNome(nome, function() criarListaDocumentos() end)
+      end
+      ids_op.btnEditCont.onClick = function()
+        editarConteudo(nome, function() criarListaDocumentos() end)
+      end
+      ids_op.btnShare.onClick = function()
+        compartilhar(nome)
+      end
+      ids_op.btnDelete.onClick = function()
+        File(dir .. nome).delete()
+        Toast.makeText(service, T("deleted"), 1).show()
+        falar(T("deleted"))
+        dlgOpcoes.dismiss()
+        criarListaDocumentos()
+      end
+      ids_op.btnCloseOpts.onClick = function()
+        dlgOpcoes.dismiss()
+        criarVisualizador(nome)
+      end
+      dlgOpcoes.show()
+    end
     mostrarMenuOpcoes(nome)
   end
   ids_vis.btnVoltarVis.onClick = function()
@@ -364,8 +751,7 @@ criarVisualizador = function(nome)
   dlg.show()
 end
 
--- ====== LISTA DE DOCUMENTOS ======
-criarListaDocumentos = function()
+local function criarListaDocumentos()
   fecharTodos()
   local arquivos = listarDocumentos()
   local ids_lst = {}
@@ -412,18 +798,15 @@ criarListaDocumentos = function()
   dlg.show()
 end
 
--- ====== COMMUNITY DIALOG ======
 local function mostrarDialogoComunidade()
   fecharTodos()
   local commDlg = LuaDialog(service)
   
-  -- Create a vertical layout for all links
   local mainLayout = LinearLayout(service)
   mainLayout.setOrientation(LinearLayout.VERTICAL)
   mainLayout.setPadding(16, 16, 16, 16)
   mainLayout.setBackgroundColor(0xFF000000)
   
-  -- Title
   local title = TextView(service)
   title.setText("Community Links")
   title.setTextColor(0xFFFFCC00)
@@ -432,7 +815,6 @@ local function mostrarDialogoComunidade()
   title.setPadding(0, 0, 0, 16)
   mainLayout.addView(title)
   
-  -- ScrollView to hold all buttons
   local scroll = ScrollView(service)
   local scrollParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0)
   scrollParams.weight = 1
@@ -442,7 +824,6 @@ local function mostrarDialogoComunidade()
   innerLayout.setOrientation(LinearLayout.VERTICAL)
   innerLayout.setLayoutParams(LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
   
-  -- Add all links as buttons
   for _, link in ipairs(community_links) do
     local btn = Button(service)
     btn.setText(link.title)
@@ -464,7 +845,6 @@ local function mostrarDialogoComunidade()
     
     innerLayout.addView(btn)
     
-    -- Add a thin separator
     local sep = View(service)
     sep.setBackgroundColor(0xFF333333)
     sep.setLayoutParams(LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 1))
@@ -474,7 +854,6 @@ local function mostrarDialogoComunidade()
   scroll.addView(innerLayout)
   mainLayout.addView(scroll)
   
-  -- Close button
   local closeBtn = Button(service)
   closeBtn.setText("Close")
   closeBtn.setBackgroundColor(0xFF333333)
@@ -490,8 +869,7 @@ local function mostrarDialogoComunidade()
   commDlg.show()
 end
 
--- ====== INTERFACE PRINCIPAL ======
-criarInterfacePrincipal = function()
+function criarInterfacePrincipal()
   fecharTodos()
 
   local ids_main = {}
@@ -500,46 +878,41 @@ criarInterfacePrincipal = function()
     LinearLayout, orientation="vertical", padding="16dp",
     background="#000000", layout_width="fill", layout_height="fill",
 
-    -- título (changed to Document Creator)
     {TextView, text=T("app_title"), textSize="20sp",
       textColor="#FFFFFF", gravity="center", paddingBottom="8dp"},
 
-    -- nome
     {EditText, id="etNome", hint=T("name_doc"),
       textColor="#FFFFFF", background="#222222",
       layout_width="fill", layout_height="wrap_content",
       inputType="text"},
 
-    -- conteúdo
     {EditText, id="etConteudo", hint=T("content_doc"),
       textColor="#FFFFFF", background="#222222",
       layout_width="fill", layout_height="0dp", layout_weight="1",
       minLines=6, gravity="top"},
 
-    -- criar TXT
     {Button, id="btnCriar", text=T("create_txt"),
       layout_width="fill", background="#FF6600", textColor="#FFFFFF"},
 
-    -- visualizar
     {Button, id="btnVisualizar", text=T("view_docs"),
       layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
 
-    -- dev
     {Button, id="btnDev", text=T("talk_dev"),
       layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
 
-    -- Join + Close horizontal
+    -- Check for Updates button is now here (between Talk to dev and Join Community)
     {LinearLayout, orientation="horizontal", layout_width="fill",
+      {Button, id="btnCheckUpdate", text=T("check_updates"),
+        background="#1E1E1E", textColor="#FFFFFF", layout_weight="1"},
       {Button, id="btnJoinCommunity", text=T("join_community"),
         background="#1E1E1E", textColor="#FFFFFF", layout_weight="1"},
-      {Button, id="btnFechar", text=T("close"),
-        background="#333333", textColor="#FFFFFF", layout_weight="1"},
     },
 
+    {Button, id="btnFechar", text=T("close"),
+      layout_width="fill", background="#333333", textColor="#FFFFFF"},
   }, ids_main))
   dlg.setCancelable(false)
 
-  -- ====== CRIAR TXT ======
   ids_main.btnCriar.onClick = function()
     local n = tostring(ids_main.etNome.getText()):gsub("^%s*(.-)%s*$", "%1")
     local c = tostring(ids_main.etConteudo.getText()):gsub("^%s*(.-)%s*$", "%1")
@@ -569,12 +942,10 @@ criarInterfacePrincipal = function()
     end
   end
 
-  -- ====== VISUALIZAR ======
   ids_main.btnVisualizar.onClick = function()
     criarListaDocumentos()
   end
 
-  -- ====== DEV ======
   ids_main.btnDev.onClick = function()
     fecharTodos()
     handler.postDelayed(Runnable({run=function()
@@ -587,12 +958,15 @@ criarInterfacePrincipal = function()
     end}), 100)
   end
 
-  -- ====== JOIN COMMUNITY ======
   ids_main.btnJoinCommunity.onClick = function()
     mostrarDialogoComunidade()
   end
 
-  -- ====== FECHAR ======
+  -- ***** CHECK FOR UPDATES BUTTON ACTION *****
+  ids_main.btnCheckUpdate.onClick = function()
+    checkUpdate(true)   -- show toast if no update
+  end
+
   ids_main.btnFechar.onClick = function()
     fecharTodos()
   end
@@ -600,5 +974,12 @@ criarInterfacePrincipal = function()
   dlg.show()
 end
 
--- ====== INICIAR ======
+-- ====== START ======
 criarInterfacePrincipal()
+
+-- Background silent update check on startup
+Thread(luajava.bindClass("java.lang.Runnable"){
+    run = function()
+        checkUpdate(false)
+    end
+}).start()
