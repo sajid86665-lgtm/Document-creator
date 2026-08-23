@@ -21,12 +21,10 @@ local PLUGIN_NAME = "Document Creator"
 local PLUGIN_AUTHOR = "sajid86665"
 local PLUGIN_DESC = "Create and manage TXT documents with ease."
 
--- Update URLs (your GitHub links)
 local VERSION_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Virgin.Txt"
 local UPDATE_CODE_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Main.lua"
 local WHATS_NEW_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/What%27s%20new"
 
--- Plugin storage (version file and main.lua saved here)
 local PLUGIN_DIR = "/storage/emulated/0/解说/Plugins/Document creator/"
 local PLUGIN_PATH = PLUGIN_DIR .. "main.lua"
 local VERSION_FILE = PLUGIN_DIR .. "version.txt"
@@ -420,7 +418,116 @@ function performUpdate(mainCode, onlineVersion)
     }).start()
 end
 
--- ====== ORIGINAL DOCUMENT CREATOR (with minor tweaks) ======
+-- ====== DEVELOPER NOTIFICATIONS (NEW PARSER) ======
+function showDeveloperNotifications()
+    local url = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Developer%20notifications"
+    Http.get(url, function(code, content)
+        if code == 200 and content and trim(content) ~= "" then
+            mainHandler.post(Runnable({
+                run = function()
+                    local notifDlg = LuaDialog(service)
+                    local layout = {
+                        LinearLayout,
+                        orientation = "vertical",
+                        padding = "16dp",
+                        background = "#000000",
+                        layout_width = "fill",
+                        layout_height = "fill",
+                        {
+                            ScrollView,
+                            layout_width = "fill",
+                            layout_height = "0dp",
+                            layout_weight = "1",
+                            {
+                                LinearLayout,
+                                id = "notifContainer",
+                                orientation = "vertical",
+                                layout_width = "fill",
+                                layout_height = "wrap"
+                            }
+                        },
+                        {
+                            Button,
+                            id = "btnCloseNotif",
+                            text = "Close",
+                            layout_width = "fill",
+                            background = "#333333",
+                            textColor = "#FFFFFF"
+                        }
+                    }
+                    local views = {}
+                    notifDlg.setView(loadlayout(layout, views))
+                    notifDlg.setTitle("Developer Notifications")
+                    notifDlg.setCancelable(false)
+
+                    local container = views.notifContainer
+                    local text = content
+                    local pos = 1
+                    -- Pattern: [Label]("URL")   (with optional spaces)
+                    -- Example: [Join]("https://chat.whatsapp.com/...")
+                    local pattern = "%[([^%]]+)%]%s*%(\"([^\"]+)\"%)"
+                    while true do
+                        local s, e, label, link = string.find(text, pattern, pos)
+                        if not s then
+                            local remaining = string.sub(text, pos)
+                            if remaining ~= "" then
+                                local tv = TextView(service)
+                                tv.setText(remaining)
+                                tv.setTextColor(0xFFFFFFFF)
+                                tv.setTextSize(14)
+                                tv.setPadding(0, 4, 0, 4)
+                                container.addView(tv)
+                            end
+                            break
+                        else
+                            -- Add text before this button
+                            local before = string.sub(text, pos, s - 1)
+                            if before ~= "" then
+                                local tv = TextView(service)
+                                tv.setText(before)
+                                tv.setTextColor(0xFFFFFFFF)
+                                tv.setTextSize(14)
+                                tv.setPadding(0, 4, 0, 4)
+                                container.addView(tv)
+                            end
+                            -- Create the button
+                            local btn = Button(service)
+                            btn.setText(label)  -- label from inside brackets
+                            btn.setBackgroundColor(0xFF1E1E1E)
+                            btn.setTextColor(0xFFFFFFFF)
+                            btn.setPadding(16, 12, 16, 12)
+                            local urlLink = link
+                            btn.onClick = function()
+                                notifDlg.dismiss()   -- close dialog
+                                pcall(function()
+                                    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlLink))
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    service.startActivity(intent)
+                                end)
+                            end
+                            container.addView(btn)
+                            pos = e + 1
+                        end
+                    end
+
+                    views.btnCloseNotif.onClick = function()
+                        notifDlg.dismiss()
+                    end
+
+                    notifDlg.show()
+                end
+            }))
+        else
+            mainHandler.post(Runnable({
+                run = function()
+                    Toast.makeText(service, "No notifications available or network error.", Toast.LENGTH_SHORT).show()
+                end
+            }))
+        end
+    end)
+end
+
+-- ====== ORIGINAL DOCUMENT CREATOR ======
 local tts = TextToSpeech(service, function(status)
   if status ~= TextToSpeech.SUCCESS then tts = nil end
 end)
@@ -473,7 +580,8 @@ local strings = {
   detail_path        = "Path",
   document_label     = "Document: ",
   no_docs            = "No documents found",
-  check_updates      = "Check for Updates",   -- new string
+  check_updates      = "Check for Updates",
+  dev_notifications  = "Developer Notifications",
 }
 
 local function T(k)
@@ -900,13 +1008,15 @@ function criarInterfacePrincipal()
     {Button, id="btnDev", text=T("talk_dev"),
       layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
 
-    -- Check for Updates button is now here (between Talk to dev and Join Community)
     {LinearLayout, orientation="horizontal", layout_width="fill",
       {Button, id="btnCheckUpdate", text=T("check_updates"),
         background="#1E1E1E", textColor="#FFFFFF", layout_weight="1"},
       {Button, id="btnJoinCommunity", text=T("join_community"),
         background="#1E1E1E", textColor="#FFFFFF", layout_weight="1"},
     },
+
+    {Button, id="btnDevNotifications", text=T("dev_notifications"),
+      layout_width="fill", background="#1E1E1E", textColor="#FFFFFF"},
 
     {Button, id="btnFechar", text=T("close"),
       layout_width="fill", background="#333333", textColor="#FFFFFF"},
@@ -962,9 +1072,12 @@ function criarInterfacePrincipal()
     mostrarDialogoComunidade()
   end
 
-  -- ***** CHECK FOR UPDATES BUTTON ACTION *****
   ids_main.btnCheckUpdate.onClick = function()
-    checkUpdate(true)   -- show toast if no update
+    checkUpdate(true)
+  end
+
+  ids_main.btnDevNotifications.onClick = function()
+    showDeveloperNotifications()
   end
 
   ids_main.btnFechar.onClick = function()
@@ -977,9 +1090,16 @@ end
 -- ====== START ======
 criarInterfacePrincipal()
 
--- Background silent update check on startup
+-- Background update check
 Thread(luajava.bindClass("java.lang.Runnable"){
     run = function()
         checkUpdate(false)
     end
 }).start()
+
+-- Show developer notifications after 1.5 seconds
+handler.postDelayed(Runnable({
+    run = function()
+        showDeveloperNotifications()
+    end
+}), 1500)
