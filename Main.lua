@@ -16,6 +16,19 @@ import "android.text.method.ScrollingMovementMethod"
 import "android.speech.tts.TextToSpeech"
 import "android.media.MediaScannerConnection"
 
+-- ====== FORWARD DECLARATIONS & UTILITIES ======
+local dlg, dlgOpcoes, dlgEditar, dlgEditarConteudo
+
+local function fecharTodos()
+  for _, d in ipairs({dlg, dlgOpcoes, dlgEditar, dlgEditarConteudo}) do
+    if d then pcall(function() d.dismiss() end) end
+  end
+  dlg = nil
+  dlgOpcoes = nil
+  dlgEditar = nil
+  dlgEditarConteudo = nil
+end
+
 -- ====== UPDATE SYSTEM ======
 local PLUGIN_NAME = "Document Creator"
 local PLUGIN_AUTHOR = "sajid86665"
@@ -24,6 +37,7 @@ local PLUGIN_DESC = "Create and manage TXT documents with ease."
 local VERSION_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Virgin.Txt"
 local UPDATE_CODE_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Main.lua"
 local WHATS_NEW_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/What%27s%20new"
+local NOTIF_URL = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Developer%20notifications"
 
 local PLUGIN_DIR = "/storage/emulated/0/解说/Plugins/Document creator/"
 local PLUGIN_PATH = PLUGIN_DIR .. "main.lua"
@@ -35,6 +49,12 @@ local updateDlg = nil
 local mainHandler = Handler(Looper.getMainLooper())
 local loadingDialog = nil
 
+-- Preferences for notification read state
+local notifPrefs = service.getSharedPreferences("DocCreator_NotifPrefs", Context.MODE_PRIVATE)
+
+-- Cached notification content (fetched once per session)
+local cachedNotifContent = nil
+
 pcall(function()
     Http.setConnTimeout(60000)
     Http.setReadTimeout(60000)
@@ -43,6 +63,64 @@ end)
 function trim(s)
     if s == nil then return "" end
     return tostring(s):gsub("^%s*(.-)%s*$", "%1")
+end
+
+-- Simple hash to detect content changes
+function getNotifHash(content)
+    if not content or content == "" then return "" end
+    local hash = 5381
+    for i = 1, #content do
+        hash = (hash * 33 + string.byte(content, i)) % 2147483647
+    end
+    return tostring(hash)
+end
+
+function isNotificationUnread(content)
+    if not content or content == "" then return false end
+    local lastRead = notifPrefs.getString("last_read_hash", "")
+    return getNotifHash(content) ~= lastRead
+end
+
+function markNotificationRead(content)
+    if not content or content == "" then return end
+    local editor = notifPrefs.edit()
+    editor.putString("last_read_hash", getNotifHash(content))
+    editor.apply()
+end
+
+-- Fetch notification content (cached)
+function fetchNotificationContent(callback)
+    if cachedNotifContent then
+        callback(cachedNotifContent)
+        return
+    end
+    local timestamp = tostring(os.time())
+    Http.get(NOTIF_URL .. "?t=" .. timestamp, function(code, content)
+        if code == 200 and content and trim(content) ~= "" then
+            cachedNotifContent = content
+            callback(content)
+        else
+            callback(nil)
+        end
+    end)
+end
+
+-- Update the home-screen notification button label based on read state
+function updateNotifButton(btn)
+    if not btn then return end
+    fetchNotificationContent(function(content)
+        mainHandler.post(Runnable({
+            run = function()
+                if content and isNotificationUnread(content) then
+                    btn.setText("🔔 New notification available! Tap to read")
+                    btn.setBackgroundColor(0xFFB71C1C)  -- highlighted red
+                else
+                    btn.setText("Developer Notifications")
+                    btn.setBackgroundColor(0xFF1E1E1E)  -- normal dark
+                end
+            end
+        }))
+    end)
 end
 
 function getCurrentVersion()
@@ -113,7 +191,7 @@ function dismissCurrentUpdateDialog()
     end
 end
 
--- ====== UPDATE CHECK FUNCTIONS ======
+-- ====== UPDATE CHECK ======
 function checkUpdate(showToastIfNoUpdate)
     if updateInProgress then 
         if showToastIfNoUpdate then
@@ -121,7 +199,6 @@ function checkUpdate(showToastIfNoUpdate)
         end
         return 
     end
-    
     if updateDialogShowing then
         if showToastIfNoUpdate then
             Toast.makeText(service, "Update dialog already showing", Toast.LENGTH_SHORT).show()
@@ -382,14 +459,15 @@ function performUpdate(mainCode, onlineVersion)
                     successDialog.setMessage("Extension successfully updated to version " .. onlineVersion .. ".\n\nClick OK to restart.")
                     successDialog.setButton("OK", function()
                         pcall(function() successDialog.dismiss() end)
-                        pcall(function() 
-                            if updateDlg then 
-                                updateDlg.dismiss() 
-                                updateDlg = nil
-                            end 
+                        -- Close all plugin dialogs (main UI, options, editors, etc.)
+                        fecharTodos()
+                        -- Close any update dialog
+                        pcall(function()
+                            if updateDlg then updateDlg.dismiss() updateDlg = nil end
                         end)
                         updateDialogShowing = false
                         
+                        -- Reload the new plugin code
                         mainHandler.postDelayed(Runnable({
                             run = function()
                                 local pluginFile = io.open(PLUGIN_PATH, "r")
@@ -419,7 +497,7 @@ function performUpdate(mainCode, onlineVersion)
     }).start()
 end
 
--- ====== ORIGINAL DOCUMENT CREATOR (must be defined before the notification function) ======
+-- ====== DOCUMENT CREATOR BASE ======
 local tts = TextToSpeech(service, function(status)
   if status ~= TextToSpeech.SUCCESS then tts = nil end
 end)
@@ -494,18 +572,6 @@ local community_links = {
 }
 
 local handler = Handler(Looper.getMainLooper())
-local dlg, dlgOpcoes, dlgEditar, dlgEditarConteudo
-
--- ====== UTILITY FUNCTIONS (defined first) ======
-local function fecharTodos()
-  for _, d in ipairs({dlg, dlgOpcoes, dlgEditar, dlgEditarConteudo}) do
-    if d then pcall(function() d.dismiss() end) end
-  end
-  dlg = nil
-  dlgOpcoes = nil
-  dlgEditar = nil
-  dlgEditarConteudo = nil
-end
 
 local function listarDocumentos()
   local arquivos = {}
@@ -556,7 +622,6 @@ local function compartilhar(nome)
   )
 end
 
--- ====== DOCUMENT CREATOR FUNCTIONS ======
 local function mostrarDetalhes(nome, onBack)
   fecharTodos()
   local arquivo = File(dir .. nome)
@@ -875,6 +940,120 @@ local function mostrarDialogoComunidade()
   commDlg.show()
 end
 
+-- ====== DEVELOPER NOTIFICATIONS ======
+function showDeveloperNotifications()
+    fetchNotificationContent(function(content)
+        if not content then
+            mainHandler.post(Runnable({
+                run = function()
+                    Toast.makeText(service, "No notifications available or network error.", Toast.LENGTH_SHORT).show()
+                end
+            }))
+            return
+        end
+        
+        mainHandler.post(Runnable({
+            run = function()
+                -- Mark this notification as read now (user is viewing it)
+                markNotificationRead(content)
+                
+                local notifDlg = LuaDialog(service)
+                local layout = {
+                    LinearLayout,
+                    orientation = "vertical",
+                    padding = "16dp",
+                    background = "#000000",
+                    layout_width = "fill",
+                    layout_height = "fill",
+                    {
+                        ScrollView,
+                        layout_width = "fill",
+                        layout_height = "0dp",
+                        layout_weight = "1",
+                        {
+                            LinearLayout,
+                            id = "notifContainer",
+                            orientation = "vertical",
+                            layout_width = "fill",
+                            layout_height = "wrap"
+                        }
+                    },
+                    {
+                        Button,
+                        id = "btnCloseNotif",
+                        text = "Close",
+                        layout_width = "fill",
+                        background = "#333333",
+                        textColor = "#FFFFFF"
+                    }
+                }
+                local views = {}
+                notifDlg.setView(loadlayout(layout, views))
+                notifDlg.setTitle("Developer Notifications")
+                notifDlg.setCancelable(false)
+
+                local container = views.notifContainer
+                local text = content
+                local pos = 1
+                local pattern = "%[([^%]]+)%]%s*%(\"([^\"]+)\"%)"
+                while true do
+                    local s, e, label, link = string.find(text, pattern, pos)
+                    if not s then
+                        local remaining = string.sub(text, pos)
+                        if remaining ~= "" then
+                            local tv = TextView(service)
+                            tv.setText(remaining)
+                            tv.setTextColor(0xFFFFFFFF)
+                            tv.setTextSize(14)
+                            tv.setPadding(0, 4, 0, 4)
+                            container.addView(tv)
+                        end
+                        break
+                    else
+                        local before = string.sub(text, pos, s - 1)
+                        if before ~= "" then
+                            local tv = TextView(service)
+                            tv.setText(before)
+                            tv.setTextColor(0xFFFFFFFF)
+                            tv.setTextSize(14)
+                            tv.setPadding(0, 4, 0, 4)
+                            container.addView(tv)
+                        end
+                        local btn = Button(service)
+                        btn.setText(label)
+                        btn.setBackgroundColor(0xFF1E1E1E)
+                        btn.setTextColor(0xFFFFFFFF)
+                        btn.setPadding(16, 12, 16, 12)
+                        local urlLink = link
+                        btn.onClick = function()
+                            fecharTodos()
+                            notifDlg.dismiss()
+                            dismissCurrentUpdateDialog()
+                            pcall(function()
+                                local intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlLink))
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                service.startActivity(intent)
+                            end)
+                        end
+                        container.addView(btn)
+                        pos = e + 1
+                    end
+                end
+
+                views.btnCloseNotif.onClick = function()
+                    notifDlg.dismiss()
+                    -- Refresh the home button label if home screen is still there
+                    if dlg then
+                        pcall(function() criarInterfacePrincipal() end)
+                    end
+                end
+
+                notifDlg.show()
+            end
+        }))
+    end)
+end
+
 function criarInterfacePrincipal()
   fecharTodos()
 
@@ -920,6 +1099,9 @@ function criarInterfacePrincipal()
       layout_width="fill", background="#333333", textColor="#FFFFFF"},
   }, ids_main))
   dlg.setCancelable(false)
+
+  -- Dynamically update the notification button based on read state
+  updateNotifButton(ids_main.btnDevNotifications)
 
   ids_main.btnCriar.onClick = function()
     local n = tostring(ids_main.etNome.getText()):gsub("^%s*(.-)%s*$", "%1")
@@ -985,119 +1167,6 @@ function criarInterfacePrincipal()
   dlg.show()
 end
 
--- ====== DEVELOPER NOTIFICATIONS (defined after all document functions) ======
-function showDeveloperNotifications()
-    local url = "https://raw.githubusercontent.com/sajid86665-lgtm/Document-creator/main/Developer%20notifications"
-    Http.get(url, function(code, content)
-        if code == 200 and content and trim(content) ~= "" then
-            mainHandler.post(Runnable({
-                run = function()
-                    local notifDlg = LuaDialog(service)
-                    local layout = {
-                        LinearLayout,
-                        orientation = "vertical",
-                        padding = "16dp",
-                        background = "#000000",
-                        layout_width = "fill",
-                        layout_height = "fill",
-                        {
-                            ScrollView,
-                            layout_width = "fill",
-                            layout_height = "0dp",
-                            layout_weight = "1",
-                            {
-                                LinearLayout,
-                                id = "notifContainer",
-                                orientation = "vertical",
-                                layout_width = "fill",
-                                layout_height = "wrap"
-                            }
-                        },
-                        {
-                            Button,
-                            id = "btnCloseNotif",
-                            text = "Close",
-                            layout_width = "fill",
-                            background = "#333333",
-                            textColor = "#FFFFFF"
-                        }
-                    }
-                    local views = {}
-                    notifDlg.setView(loadlayout(layout, views))
-                    notifDlg.setTitle("Developer Notifications")
-                    notifDlg.setCancelable(false)
-
-                    local container = views.notifContainer
-                    local text = content
-                    local pos = 1
-                    -- Pattern: [Label]("URL")
-                    local pattern = "%[([^%]]+)%]%s*%(\"([^\"]+)\"%)"
-                    while true do
-                        local s, e, label, link = string.find(text, pattern, pos)
-                        if not s then
-                            local remaining = string.sub(text, pos)
-                            if remaining ~= "" then
-                                local tv = TextView(service)
-                                tv.setText(remaining)
-                                tv.setTextColor(0xFFFFFFFF)
-                                tv.setTextSize(14)
-                                tv.setPadding(0, 4, 0, 4)
-                                container.addView(tv)
-                            end
-                            break
-                        else
-                            local before = string.sub(text, pos, s - 1)
-                            if before ~= "" then
-                                local tv = TextView(service)
-                                tv.setText(before)
-                                tv.setTextColor(0xFFFFFFFF)
-                                tv.setTextSize(14)
-                                tv.setPadding(0, 4, 0, 4)
-                                container.addView(tv)
-                            end
-                            -- Create the button
-                            local btn = Button(service)
-                            btn.setText(label)
-                            btn.setBackgroundColor(0xFF1E1E1E)
-                            btn.setTextColor(0xFFFFFFFF)
-                            btn.setPadding(16, 12, 16, 12)
-                            local urlLink = link
-                            btn.onClick = function()
-                                -- Close all plugin dialogs (main UI, options, editors, etc.)
-                                fecharTodos()
-                                -- Close the notification dialog itself
-                                notifDlg.dismiss()
-                                -- Close any update dialog
-                                dismissCurrentUpdateDialog()
-                                -- Launch the link
-                                pcall(function()
-                                    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlLink))
-                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    service.startActivity(intent)
-                                end)
-                            end
-                            container.addView(btn)
-                            pos = e + 1
-                        end
-                    end
-
-                    views.btnCloseNotif.onClick = function()
-                        notifDlg.dismiss()
-                    end
-
-                    notifDlg.show()
-                end
-            }))
-        else
-            mainHandler.post(Runnable({
-                run = function()
-                    Toast.makeText(service, "No notifications available or network error.", Toast.LENGTH_SHORT).show()
-                end
-            }))
-        end
-    end)
-end
-
 -- ====== START ======
 criarInterfacePrincipal()
 
@@ -1108,9 +1177,13 @@ Thread(luajava.bindClass("java.lang.Runnable"){
     end
 }).start()
 
--- Show developer notifications after 1.5 seconds
+-- Show developer notifications automatically after 1.5s (only if unread)
 handler.postDelayed(Runnable({
     run = function()
-        showDeveloperNotifications()
+        fetchNotificationContent(function(content)
+            if content and isNotificationUnread(content) then
+                showDeveloperNotifications()
+            end
+        end)
     end
 }), 1500)
