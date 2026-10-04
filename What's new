@@ -1,1 +1,46 @@
-This update has been made to improve your user experience. We haven't introduced any new features, but the 1.7 update will be shared with you very soon. 🚀
+The Major Update Document Creator has received a new update. What's new in this update? What have we added? This is the biggest update yet, and the best extension so far.
+
+So friends, now let's find out what new things we have added. 🎉
+
+1. New startup flow — update check before app opens
+2. If update available, app stays closed and shows update dialog only
+3. If no update, "No update available" toast appears and app opens
+4. New home screen layout with clean button list
+5. Create New File button (highlighted) on top
+6. Recent Files button for saved documents
+7. About section with plugin details
+8. Community Links section with all official links
+9. More menu containing Updates, Notifications, and Developer contact
+10. Redesigned Create New File screen
+11. Format spinner at the top of file creator
+12. Insert Template button to load starter code
+13. Run button to test code directly
+14. Title input field for file name
+15. Large content editor with scroll support
+16. 27 file formats supported (txt, md, html, css, js, json, xml, csv, php, py, lua, java, cpp, c, sql, yaml, ini, sh, bat, log, rtf, ts, kt, go, rb, rs)
+17. Every format has a working inbuilt starter template
+18. Lua code runs inside the app with output dialog
+19. HTML files open in browser for instant preview
+20. Other formats save as preview file for external testing
+21. Compile and runtime errors shown clearly
+22. Developer Notifications with unread indicator
+23. Button shows "Developer Notifications (New)" in red when unread
+24. Notification auto-opens on startup if unread
+25. Supports [Label]("URL") button format in notifications
+26. Clicking a notification button closes dialog and opens link
+27. Notification stays unread until user reads it
+28. Check for Updates option in More menu
+29. Talk to Developer option in More menu
+30. Update dialog shows current vs server version
+31. Changelog displayed with each update
+32. Auto-restart after successful update
+33. All dialogs close cleanly before reloading
+34. Bug fixes for LayoutParams and handler errors
+35. Better file operation error handling
+36. Cached notification content for faster loading
+37. Reduced unnecessary network calls
+38. Faster startup time
+39. Text-to-speech feedback for key actions
+40. Clean button labels without emojis
+
+For feedback: https://wa.me/919118141191
